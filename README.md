@@ -10,5 +10,4 @@ make sure PATH is configured
 
 1. uv venv --python 3.10
 2. source .venv/bin/activate
-3. uv add opencv-python numpy
-4. uv run food_calories_ar.py
+3. uv run food_calories_ar.py 
