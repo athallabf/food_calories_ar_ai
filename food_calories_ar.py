@@ -3,23 +3,46 @@ import numpy as np
 import time
 import json
 import os
+import torch
+from pathlib import Path
+from utils.general import check_img_size, non_max_suppression, scale_boxes
+from utils.torch_utils import select_device
+
+# Import YOLOv5 detection modules
+from detect import run, DetectMultiBackend
 
 class FoodCaloriesAR:
-    def __init__(self):
+    def __init__(self, weights_path='best.pt', device=''):
         """Initialize the Food Calories AR system"""
+        # Camera setup
         self.cap = cv2.VideoCapture(0)
+        self.camera_matrix = None
+        self.dist_coeffs = None
+        self.calibrate_camera()
+        
+        # Original initialization
         self.food_database = {}
         self.load_food_database()
         self.last_time = 0
         self.fps = 0
-        self.detected_foods = []  # Will be populated by the model later
+        self.detected_foods = []
         
-        # Placeholder until real model is integrated
-        self.placeholder_foods = [
-            {"name": "Apple", "calories": 95, "confidence": 0.92},
-            {"name": "Banana", "calories": 105, "confidence": 0.89},
-            {"name": "Pizza Slice", "calories": 285, "confidence": 0.78}
-        ]
+        # 2D visualization settings
+        self.info_panel_height = 80
+        self.info_panel_width = 200
+        self.panel_margin = 10
+        
+        # Initialize YOLOv5 model
+        print(f"Loading model from {weights_path}...")
+        self.device = select_device(device)
+        self.model = DetectMultiBackend(weights_path, device=self.device)
+        self.stride = self.model.stride
+        self.names = self.model.names
+        self.pt = self.model.pt
+        self.imgsz = (640, 640)  # inference size
+        self.imgsz = check_img_size(self.imgsz, s=self.stride)
+        self.model.warmup(imgsz=(1, 3, *self.imgsz))
+        print("Model loaded successfully!")
         
         # AR display settings
         self.font = cv2.FONT_HERSHEY_SIMPLEX
@@ -29,38 +52,34 @@ class FoodCaloriesAR:
         self.thickness = 2
         
         # Demo mode for testing without model
-        self.demo_mode = True
-        self.demo_counter = 0
+        self.demo_mode = False  # Set to False since we have the model now
+        
+    def calibrate_camera(self):
+        """Basic camera calibration"""
+        # Get camera resolution
+        width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Approximate camera matrix for AR visualization
+        focal_length = width
+        center = (width/2, height/2)
+        self.camera_matrix = np.array(
+            [[focal_length, 0, center[0]],
+             [0, focal_length, center[1]],
+             [0, 0, 1]], dtype=np.float32)
+        
+        # Assume no lens distortion
+        self.dist_coeffs = np.zeros((4,1))
         
     def load_food_database(self):
         """Load the food calorie database from JSON file"""
-        try:
-            # You can replace this with your own food database
-            sample_db = {
-                "apple": {"calories": 95, "serving_size": "1 medium (182g)"},
-                "banana": {"calories": 105, "serving_size": "1 medium (118g)"},
-                "orange": {"calories": 62, "serving_size": "1 medium (131g)"},
-                "rice": {"calories": 206, "serving_size": "1 cup cooked (158g)"},
-                "bread": {"calories": 75, "serving_size": "1 slice (30g)"},
-                "chicken_breast": {"calories": 165, "serving_size": "100g cooked"},
-                "egg": {"calories": 78, "serving_size": "1 large (50g)"},
-                "milk": {"calories": 103, "serving_size": "1 cup (244g)"},
-                "pizza_slice": {"calories": 285, "serving_size": "1 slice (107g)"},
-                "french_fries": {"calories": 365, "serving_size": "medium serving (117g)"}
-            }
             
-            # If you have a JSON file, you can load it like this:
-            # if os.path.exists("food_database.json"):
-            #     with open("food_database.json", 'r') as f:
-            #         self.food_database = json.load(f)
-            # else:
-            self.food_database = sample_db
-                
-            print(f"Food database loaded with {len(self.food_database)} items")
+        # If you have a JSON file, you can load it like this:
+        if os.path.exists("food_database.json"):
+            with open("food_database.json", 'r') as f:
+                self.food_database = json.load(f)
             
-        except Exception as e:
-            print(f"Error loading food database: {e}")
-            self.food_database = {}
+        print(f"Food database loaded with {len(self.food_database)} items")
             
     def get_food_info(self, food_name):
         """Get calorie information for a detected food item"""
@@ -80,43 +99,54 @@ class FoodCaloriesAR:
         
     def detect_food(self, frame):
         """
-        Placeholder for food detection model
-        This will be replaced with actual model inference once available
+        Detect food items using YOLOv5 model
         """
-        # This is just a placeholder that simulates food detection 
-        # by randomly placing boxes - will be replaced by your model
+        if self.demo_mode:
+            return super().detect_food(frame)
+            
+        # Preprocess image for YOLOv5
+        img = cv2.resize(frame, self.imgsz)
+        img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+        img = np.ascontiguousarray(img)
+        img = torch.from_numpy(img).to(self.device)
+        img = img.float()
+        img /= 255.0
+        if len(img.shape) == 3:
+            img = img[None]
+            
+        # Inference
+        pred = self.model(img, augment=False, visualize=False)
         
-        h, w = frame.shape[:2]
+        # NMS
+        pred = non_max_suppression(pred, conf_thres=0.25, iou_thres=0.45, max_det=1000)
+        
         detected = []
         
-        if self.demo_mode:
-            # For demo purposes, show different foods in different regions
-            self.demo_counter += 1
-            if self.demo_counter % 30 == 0:  # Change detection every ~1 second
-                # Reset detections occasionally to simulate new detections
-                detected = []
+        # Process detections
+        for i, det in enumerate(pred):  # per image
+            if len(det):
+                # Rescale boxes from img_size to frame size
+                det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], frame.shape).round()
                 
-                # Randomly choose 1-2 food items
-                num_detections = np.random.randint(1, 3)
-                for _ in range(num_detections):
-                    food = np.random.choice(self.placeholder_foods)
-                    x = np.random.randint(50, w - 200)
-                    y = np.random.randint(50, h - 200)
-                    width = np.random.randint(150, 300)
-                    height = np.random.randint(150, 300)
+                # Process detections
+                for *xyxy, conf, cls in reversed(det):
+                    x1, y1, x2, y2 = map(int, xyxy)
+                    class_id = int(cls)
+                    class_name = self.names[class_id]
+                    confidence = float(conf)
+                    
+                    # Get food info from database
+                    food_info = self.get_food_info(class_name)
+                    calories = food_info.get('calories', 'Unknown')
                     
                     detected.append({
-                        "name": food["name"],
-                        "calories": food["calories"],
-                        "confidence": food["confidence"],
-                        "box": (x, y, width, height)
+                        "name": class_name,
+                        "calories": calories,
+                        "confidence": confidence,
+                        "box": (x1, y1, x2-x1, y2-y1)  # Convert to (x, y, w, h) format
                     })
                     
-                self.detected_foods = detected
-            else:
-                # Keep the current detections
-                detected = self.detected_foods
-                
+        self.detected_foods = detected
         return detected
         
     def draw_food_info(self, frame, food_items):
@@ -131,7 +161,7 @@ class FoodCaloriesAR:
             cv2.rectangle(frame, (x, y), (x + w, y + h), self.box_color, 2)
             
             # Create info box for food details
-            info_bg = np.zeros((80, 200, 3), dtype=np.uint8)
+            info_bg = np.zeros((self.info_panel_height, self.info_panel_width, 3), dtype=np.uint8)
             info_bg[:, :] = (0, 0, 150)  # Dark blue background
             
             # Get detailed info
@@ -145,19 +175,19 @@ class FoodCaloriesAR:
             
             # Find best position for info box (avoid overlapping with food)
             if y > 100:  # If enough space above the food
-                info_y = max(0, y - 90)
+                info_y = max(0, y - self.info_panel_height - self.panel_margin)
                 info_x = max(0, x)
             else:  # Place below the food
-                info_y = min(frame.shape[0] - 80, y + h + 10)
+                info_y = min(frame.shape[0] - self.info_panel_height, y + h + self.panel_margin)
                 info_x = max(0, x)
                 
             # Make sure info box fits in frame
-            info_x = min(info_x, frame.shape[1] - 200)
+            info_x = min(info_x, frame.shape[1] - self.info_panel_width)
             
             # Add info box to frame with semi-transparency
             alpha = 0.7
-            roi = frame[info_y:info_y+80, info_x:info_x+200]
-            frame[info_y:info_y+80, info_x:info_x+200] = cv2.addWeighted(roi, 1-alpha, info_bg, alpha, 0)
+            roi = frame[info_y:info_y+self.info_panel_height, info_x:info_x+self.info_panel_width]
+            frame[info_y:info_y+self.info_panel_height, info_x:info_x+self.info_panel_width] = cv2.addWeighted(roi, 1-alpha, info_bg, alpha, 0)
             
             # Draw connecting line from box to food
             cv2.line(frame, (x + w//2, y + h//2), (info_x + 100, info_y + 40), (255, 255, 0), 1)
@@ -175,7 +205,20 @@ class FoodCaloriesAR:
             cv2.rectangle(frame, (gauge_x, gauge_y), (gauge_x + conf_width, gauge_y + gauge_height), conf_color, -1)
             
         return frame
+    
+    def process_frame(self, frame):
+        """Process a frame with 2D visualization"""
+        # Detect food items
+        detections = self.detect_food(frame)
         
+        # Draw information for each detection
+        frame = self.draw_food_info(frame, detections)
+        
+        # Add AR interface elements
+        frame = self.add_ar_interface(frame)
+        
+        return frame
+
     def add_ar_interface(self, frame):
         """Add AR interface elements to the frame"""
         h, w = frame.shape[:2]
@@ -209,40 +252,27 @@ class FoodCaloriesAR:
             return
             
         print("Food Calories AR System")
-        print("Press 'q' to quit, 'd' to toggle demo mode")
+        print("Press 'q' to quit")
+        
+        cv2.namedWindow("Food Calories AR", cv2.WINDOW_NORMAL)
         
         while True:
             ret, frame = self.cap.read()
             if not ret:
-                print("Error: Cannot read frame from webcam")
                 break
                 
             # Flip horizontally for mirror effect
             frame = cv2.flip(frame, 1)
             
-            # Detect food in the frame (placeholder until model is ready)
-            food_items = self.detect_food(frame)
+            # Process frame
+            frame = self.process_frame(frame)
             
-            # Draw food information in AR
-            if food_items:
-                frame = self.draw_food_info(frame, food_items)
-                
-            # Add AR interface elements
-            frame_with_ui = self.add_ar_interface(frame)
+            # Display result
+            cv2.imshow("Food Calories AR", frame)
             
-            # Display the result
-            cv2.imshow('Food Calories AR', frame_with_ui)
-            
-            # Handle key presses
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
+            if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-            elif key == ord('d'):
-                self.demo_mode = not self.demo_mode
-                print(f"Demo mode {'enabled' if self.demo_mode else 'disabled'}")
-                self.detected_foods = []  # Clear existing detections
                 
-        # Clean up
         self.cap.release()
         cv2.destroyAllWindows()
         

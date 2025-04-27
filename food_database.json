@@ -1,0 +1,13 @@
+{
+    "apple": {"calories": 95, "serving_size": "1 medium (182g)"},
+    "banana": {"calories": 105, "serving_size": "1 medium (118g)"},
+    "orange": {"calories": 62, "serving_size": "1 medium (131g)"},
+    "rice": {"calories": 206, "serving_size": "1 cup cooked (158g)"},
+    "bread": {"calories": 75, "serving_size": "1 slice (30g)"},
+    "chicken_breast": {"calories": 165, "serving_size": "100g cooked"},
+    "pizza_slice": {"calories": 285, "serving_size": "1 slice (107g)"},
+    "hamburger": {"calories": 250, "serving_size": "1 regular (110g)"},
+    "french_fries": {"calories": 365, "serving_size": "medium serving (117g)"},
+    "salad": {"calories": 100, "serving_size": "1 bowl (100g)"},
+    "person": {"calories": 2000, "serving_size": "1 day"}
+}
