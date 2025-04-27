@@ -9,5 +9,8 @@
     "hamburger": {"calories": 250, "serving_size": "1 regular (110g)"},
     "french_fries": {"calories": 365, "serving_size": "medium serving (117g)"},
     "salad": {"calories": 100, "serving_size": "1 bowl (100g)"},
-    "person": {"calories": 2000, "serving_size": "1 day"}
+    "person": {"calories": 2000, "serving_size": "1 day"},
+    "hot dog": {"calories": 150, "serving_size": "1 hot dog (45g)"},
+    "pizza": {"calories": 285, "serving_size": "1 slice (107g)"},
+    "donut": {"calories": 195, "serving_size": "1 donut (52g)"}
 }
