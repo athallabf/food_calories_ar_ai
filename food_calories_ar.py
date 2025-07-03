@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 import json
-import os
+import os   
 import torch
 from pathlib import Path
 from utils.general import check_img_size, non_max_suppression, scale_boxes
@@ -121,6 +121,7 @@ class FoodCaloriesAR:
         pred = non_max_suppression(pred, conf_thres=0.25, iou_thres=0.45, max_det=1000)
         
         detected = []
+        person_detected = False
         
         # Process detections
         for i, det in enumerate(pred):  # per image
@@ -135,6 +136,11 @@ class FoodCaloriesAR:
                     class_name = self.names[class_id]
                     confidence = float(conf)
                     
+                    # Check if person is detected (class name could be 'person' or similar)
+                    if class_name.lower() in ['person', 'people', 'human', 'man', 'woman']:
+                        person_detected = True
+                        continue  # Skip adding person to detected items
+                    
                     # Get food info from database
                     food_info = self.get_food_info(class_name)
                     calories = food_info.get('calories', 'Unknown')
@@ -145,6 +151,11 @@ class FoodCaloriesAR:
                         "confidence": confidence,
                         "box": (x1, y1, x2-x1, y2-y1)  # Convert to (x, y, w, h) format
                     })
+        
+        # If person is detected, return empty list (no AR display)
+        if person_detected:
+            self.detected_foods = []
+            return []
                     
         self.detected_foods = detected
         return detected
